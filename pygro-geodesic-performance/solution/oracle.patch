@@ -1,0 +1,105 @@
+diff --git a/pygro/geodesic_engine.py b/pygro/geodesic_engine.py
+index dd2c26a..d519846 100644
+--- a/pygro/geodesic_engine.py
++++ b/pygro/geodesic_engine.py
+@@ -8,7 +8,7 @@ from pygro.integrators import AVAILABLE_INTEGRATORS
+ from pygro.metric_engine import Metric
+ if TYPE_CHECKING:
+     from pygro.geodesic import Geodesic
+-from sympy.utilities.autowrap import autowrap
++from sympy.utilities.autowrap import autowrap, CodeWrapError
+ from sympy.utilities.lambdify import lambdify
+ import logging
+ 
+@@ -76,21 +76,37 @@ class GeodesicEngine():
+         else:
+             self._wrapper = "autowrap"
+ 
+-        self._motion_eq_f = []
++        motion_eq_s = sp.Matrix([
++            self.metric.subs_functions(eq)
++            for eq in [*self.eq_x, *self.eq_u]
++        ])
++        motion_eq_args = [
++            *self.metric.x,
++            *self.metric.u,
++            *self.metric.get_parameters_symb(),
++        ]
++
++        if self._wrapper == "autowrap":
++            try:
++                motion_eq_f = autowrap(
++                    motion_eq_s,
++                    backend="cython",
++                    args=motion_eq_args,
++                )
++            except (OSError, CodeWrapError):
++                logging.warning("Falling back to 'lambdify' backend because the current platform is not compatible with 'autowrap'. This may affect performances.")
++                self._wrapper = "lambdify"
++                motion_eq_f = lambdify(motion_eq_args, motion_eq_s)
++        else:
++            motion_eq_f = lambdify(motion_eq_args, motion_eq_s)
+ 
+-        for eq in [*self.eq_x, *self.eq_u]:
+-            if self._wrapper == "autowrap":
+-                try:
+-                    self._motion_eq_f.append(autowrap(self.metric.subs_functions(eq), backend='cython', args = [*self.metric.x, *self.metric.u, *self.metric.get_parameters_symb()]))
+-                except OSError:
+-                    logging.warning("Falling back to 'lambdify' backend because the current platform is not compatible with 'autowrap'. This may affect performances.")
+-                    self._wrapper = "lambdify"
+-                    self._motion_eq_f.append(lambdify([*self.metric.x, *self.metric.u, *self.metric.get_parameters_symb()], self.metric.subs_functions(eq)))
+-            elif self._wrapper == "lambdify":
+-                self._motion_eq_f.append(lambdify([*self.metric.x, *self.metric.u, *self.metric.get_parameters_symb()], self.metric.subs_functions(eq)))
++        # Keep the compiled callable available under the pre-existing private
++        # attribute, but evaluate the complete first-order system in one call.
++        self._motion_eq_f = [motion_eq_f]
+ 
+         def _f_eq(tau, xu):
+-            return np.array([self._motion_eq_f[i](*xu, *self.metric.get_parameters_val()) for i in range(8)])
++            result = motion_eq_f(*xu, *self.metric.get_parameters_val())
++            return np.asarray(result, dtype=float).reshape(8)
+ 
+         self.motion_eq = _f_eq
+         
+@@ -231,4 +247,4 @@ class StoppingCriterionList:
+                 self.exit = stopping_criterion.exit
+                 break
+ 
+-        return check
+\ No newline at end of file
++        return check
+diff --git a/pygro/integrators.py b/pygro/integrators.py
+index 4fe5afb..4d49535 100644
+--- a/pygro/integrators.py
++++ b/pygro/integrators.py
+@@ -122,7 +122,10 @@ class ExplicitAdaptiveRungeKuttaIntegrator(Integrator):
+         self.max_iter = max_iter
+     
+     def next_step(self, x: float, y: np.ndarray, h: float, x_end: float) -> Tuple[float, np.ndarray, float]:
+-        k = np.zeros(self.stages, dtype = object)
++        # Store the stage derivatives in a contiguous numeric matrix.  The
++        # previous object array made every dot product an interpreted Python
++        # loop over ndarray objects.
++        k = np.empty((self.stages, len(y)), dtype=np.result_type(y, float))
+         h1 = h
+         
+         j = 1
+@@ -136,8 +139,10 @@ class ExplicitAdaptiveRungeKuttaIntegrator(Integrator):
+ 
+             h1 = x1 - x
+             
+-            for i in range(self.stages):
+-                k[i] = self.f(x+self.c[i]*h1, y + h1*np.dot(k, self.a[i]))
++            k[0] = self.f(x, y)
++            for i in range(1, self.stages):
++                stage_delta = np.dot(self.a[i, :i], k[:i])
++                k[i] = self.f(x+self.c[i]*h1, y + h1*stage_delta)
+             
+             y_propagation = y + h1*np.dot(self.b[1], k)
+             y_error = y + h1*np.dot(self.b[0], k)
+@@ -465,4 +470,3 @@ def get_integrator(integrator: AVAILABLE_INTEGRATORS, *args, **kwargs) -> Integr
+         return CashKarp45(*args, **kwargs)
+     if integrator == "rkf78":
+         return RungeKuttaFehlberg78(*args, **kwargs)
+-    
+\ No newline at end of file

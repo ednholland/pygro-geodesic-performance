@@ -1,0 +1,35 @@
+schema_version = "1.1"
+artifacts = ["/app"]
+
+[task]
+name = "ednholland/pygro-geodesic-performance"
+description = "Improve the performance of PyGRO's adaptive geodesic integration while preserving numerical behavior."
+authors = [{ name = "Ed Holland", email = "edholland@meta.com" }]
+keywords = ["python", "performance", "scientific-computing", "sympy", "runge-kutta"]
+
+[metadata]
+category_subdomain = "scientific_computing"
+category_usecase = "latency_reduction"
+
+[verifier]
+# Isolate grading from the agent by using a fresh copy of the task environment.
+environment_mode = "separate"
+timeout_sec = 900.0
+
+[agent]
+timeout_sec = 1200.0
+
+[environment]
+build_timeout_sec = 900.0
+cpus = 1
+memory_mb = 4096
+storage_mb = 10240
+gpus = 0
+allow_internet = false
+mcp_servers = []
+
+[verifier.env]
+
+[environment.env]
+
+[solution.env]
